@@ -1,0 +1,32 @@
+{
+  "users": [
+    {
+      "id": "mljyc1us-g8v3ue0o",
+      "name": "badsys",
+      "email": "badsys1337@gmail.com",
+      "image": "https://lh3.googleusercontent.com/a/ACg8ocKMXwKOiCOxR7l_9d8qsAZoEm2Ie_yPj8_V5odPqOHm7MinPQ=s96-c",
+      "passwordHash": "",
+      "createdAt": "2026-02-12T21:09:25.732Z"
+    },
+    {
+      "id": "mljycjx3-pwna2xb5",
+      "name": "nospreader",
+      "email": "hvhmontageosa@gmail.com",
+      "passwordHash": "$2b$12$F0KM3RePuz77Z6V.ekhnv.TTlNsejcQrdqq0KmrZaXeKUfFhB5TA.",
+      "image": "",
+      "createdAt": "2026-02-12T21:09:49.143Z"
+    }
+  ],
+  "favorites": [
+    {
+      "id": "mljyc7u4-rv5wv6cp",
+      "userId": "mljyc1us-g8v3ue0o",
+      "trackUrl": "https://upload.wikimedia.org/wikipedia/commons/a/ad/Chopin_-_Polonaise_in_A-flat_Op-53_%28Piano_Performance_by_eld%C3%BCendes%C3%BCarez%29.wav",
+      "title": "Chopin Polonaise in A flat Op 53 (Piano Performance by eldüendesüarez)",
+      "composer": "Chopin",
+      "provider": "wikimedia commons",
+      "sourcePage": "https://commons.wikimedia.org/wiki/File:Chopin_-_Polonaise_in_A-flat_Op-53_(Piano_Performance_by_eld%C3%BCendes%C3%BCarez).wav",
+      "createdAt": "2026-02-12T21:09:33.484Z"
+    }
+  ]
+}
