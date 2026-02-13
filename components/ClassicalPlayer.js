@@ -8,12 +8,12 @@ const I18N = {
   en: {
     nowPlaying: "now playing",
     selectPiece: "select a piece",
-    musician: "musician",
+    musician: "composer",
     volume: "volume",
     library: "library",
     pieces: "pieces",
     searchPiece: "search piece name...",
-    allMusicians: "all musicians",
+    allMusicians: "all composers",
     sortByComposer: "composer",
     sortByPiece: "piece",
     loading: "loading...",
@@ -29,13 +29,13 @@ const I18N = {
   ru: {
     nowPlaying: "сейчас играет",
     selectPiece: "выберите произведение",
-    musician: "музыкант",
+    musician: "композитор",
     volume: "громкость",
     library: "библиотека",
     pieces: "произведений",
     searchPiece: "поиск по названию...",
-    allMusicians: "все музыканты",
-    sortByComposer: "музыкант",
+    allMusicians: "все композиторы",
+    sortByComposer: "композитор",
     sortByPiece: "произведение",
     loading: "загрузка...",
     source: "источник",
@@ -45,35 +45,35 @@ const I18N = {
     next: "далее",
     language: "язык",
     favorite: "избранное",
-    noResults: "по фильтрам ничего не найдено"
+    noResults: "ничего не найдено"
   },
   kk: {
-    nowPlaying: "қазір ойналуда",
+    nowPlaying: "қазір ойнауда",
     selectPiece: "шығарманы таңдаңыз",
-    musician: "музыкант",
+    musician: "композитор",
     volume: "дыбыс",
     library: "кітапхана",
     pieces: "шығарма",
-    searchPiece: "шығарма атауын іздеу...",
-    allMusicians: "барлық музыкант",
-    sortByComposer: "музыкант",
+    searchPiece: "атауы бойынша іздеу...",
+    allMusicians: "барлық композитор",
+    sortByComposer: "композитор",
     sortByPiece: "шығарма",
     loading: "жүктелуде...",
     source: "дереккөз",
     prev: "алдыңғы",
     play: "ойнату",
-    pause: "үзіліс",
+    pause: "тоқтату",
     next: "келесі",
     language: "тіл",
     favorite: "таңдаулы",
-    noResults: "сүзгі бойынша ештеңе табылмады"
+    noResults: "ештеңе табылмады"
   }
 };
 
 const LANGUAGES = [
-  { value: "en", label: "🇺🇸 english" },
-  { value: "ru", label: "🇷🇺 русский" },
-  { value: "kk", label: "🇰🇿 қазақша" }
+  { value: "en", label: "English" },
+  { value: "ru", label: "Русский" },
+  { value: "kk", label: "Қазақша" }
 ];
 
 function formatTime(seconds) {
@@ -84,7 +84,7 @@ function formatTime(seconds) {
 }
 
 function normalizeComposer(value = "") {
-  return value.replace(/\s+/g, " ").trim();
+  return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 function toUiTrack(rawTrack) {
@@ -114,10 +114,13 @@ function mergeAndCleanTracks(...groups) {
 }
 
 function PlayerIcon({ type }) {
-  if (type === "prev") return <span aria-hidden="true">⏮</span>;
-  if (type === "next") return <span aria-hidden="true">⏭</span>;
-  if (type === "pause") return <span aria-hidden="true">⏸</span>;
-  return <span aria-hidden="true">▶</span>;
+  const map = {
+    prev: "⏮",
+    next: "⏭",
+    pause: "⏸",
+    play: "▶"
+  };
+  return <span aria-hidden="true">{map[type] || map.play}</span>;
 }
 
 export default function ClassicalPlayer({ user }) {
@@ -143,11 +146,13 @@ export default function ClassicalPlayer({ user }) {
   const languageMenuRef = useRef(null);
   const t = I18N[language] || I18N.en;
 
+  const isAuthed = Boolean(user?.id);
+
   const composers = useMemo(
     () =>
-      Array.from(
-        new Set(tracks.map((track) => normalizeComposer(track.composer || "")).filter(Boolean))
-      ).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })),
+      Array.from(new Set(tracks.map((track) => normalizeComposer(track.composer || "")).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b, undefined, { sensitivity: "base" })
+      ),
     [tracks]
   );
 
@@ -156,10 +161,7 @@ export default function ClassicalPlayer({ user }) {
     const list = tracks.filter((track) => {
       const composer = normalizeComposer(track.composer || "");
       const matchComposer = composerFilter === "all" || composer === composerFilter;
-      const matchText =
-        !text ||
-        track.title.toLowerCase().includes(text) ||
-        composer.toLowerCase().includes(text);
+      const matchText = !text || track.title.toLowerCase().includes(text) || composer.toLowerCase().includes(text);
       return matchComposer && matchText;
     });
 
@@ -170,49 +172,47 @@ export default function ClassicalPlayer({ user }) {
     );
   }, [tracks, searchPiece, composerFilter, sortBy]);
 
-  const currentIndex = useMemo(
-    () => tracks.findIndex((track) => track.url === currentUrl),
-    [tracks, currentUrl]
-  );
+  const currentIndex = useMemo(() => tracks.findIndex((track) => track.url === currentUrl), [tracks, currentUrl]);
   const currentTrack = currentIndex >= 0 ? tracks[currentIndex] : tracks[0];
   const currentFavorite = currentTrack?.url ? favorites.has(currentTrack.url) : false;
 
   useEffect(() => {
-    let cancelled = false;
+    const ctrl = new AbortController();
     async function loadTracks() {
+      setLoading(true);
+      setError("");
       try {
-        const response = await fetch("/api/classical-tracks");
+        const response = await fetch("/api/classical-tracks", { signal: ctrl.signal });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "could not load tracks");
 
         const loadedTracks = mergeAndCleanTracks(data.tracks || []);
-        if (!cancelled) {
-          setTracks(loadedTracks);
-          if (loadedTracks[0]?.url) setCurrentUrl(loadedTracks[0].url);
-        }
+        setTracks(loadedTracks);
+        if (loadedTracks[0]?.url) setCurrentUrl(loadedTracks[0].url);
       } catch (loadError) {
-        if (!cancelled) setError(loadError.message || "failed loading tracks");
+        if (ctrl.signal.aborted) return;
+        setError(loadError?.message || "failed loading tracks");
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!ctrl.signal.aborted) setLoading(false);
       }
     }
 
     loadTracks();
-    return () => {
-      cancelled = true;
-    };
+    return () => ctrl.abort();
   }, []);
 
   useEffect(() => {
-    if (!user) return;
-    let cancelled = false;
+    if (!isAuthed) return;
+    const ctrl = new AbortController();
     async function loadCustom() {
-      const res = await fetch("/api/custom-tracks");
-      if (!res.ok) return;
-      const data = await res.json();
-      const customTracks = data.customTracks || [];
-      if (!cancelled && customTracks.length) {
-        const mappedCustom = customTracks.map((track) => ({
+      try {
+        const res = await fetch("/api/custom-tracks", { signal: ctrl.signal });
+        if (!res.ok) return;
+        const data = await res.json();
+        const customTracks = data.customTracks || [];
+        if (!customTracks.length) return;
+
+        const mapped = customTracks.map((track) => ({
           id: track.id,
           title: track.title,
           composer: track.composer,
@@ -221,31 +221,27 @@ export default function ClassicalPlayer({ user }) {
           sourcePage: track.sourcePage
         }));
 
-        setTracks((prev) => mergeAndCleanTracks(prev, mappedCustom));
-      }
+        setTracks((prev) => mergeAndCleanTracks(prev, mapped));
+      } catch (_) {}
     }
     loadCustom();
-    return () => {
-      cancelled = true;
-    };
-  }, [user]);
+    return () => ctrl.abort();
+  }, [isAuthed]);
 
   useEffect(() => {
-    if (!user) return;
-    let cancelled = false;
+    if (!isAuthed) return;
+    const ctrl = new AbortController();
     async function loadFavorites() {
-      const response = await fetch("/api/favorites");
-      if (!response.ok) return;
-      const data = await response.json();
-      if (!cancelled) {
+      try {
+        const response = await fetch("/api/favorites", { signal: ctrl.signal });
+        if (!response.ok) return;
+        const data = await response.json();
         setFavorites(new Set((data.favorites || []).map((item) => item.trackUrl)));
-      }
+      } catch (_) {}
     }
     loadFavorites();
-    return () => {
-      cancelled = true;
-    };
-  }, [user]);
+    return () => ctrl.abort();
+  }, [isAuthed]);
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume;
@@ -265,14 +261,12 @@ export default function ClassicalPlayer({ user }) {
   }, [isPlaying, currentTrack?.url]);
 
   useEffect(() => {
-    // record recently played when playback starts for a track (avoid duplicates)
     if (!currentTrack?.url || !isPlaying) return;
 
     const url = currentTrack.url;
     if (lastRecordedRef.current === url) return;
     lastRecordedRef.current = url;
 
-    // guest fallback: local history
     try {
       const key = "recentlyPlayed";
       const prev = JSON.parse(localStorage.getItem(key) || "[]");
@@ -290,7 +284,7 @@ export default function ClassicalPlayer({ user }) {
       localStorage.setItem(key, JSON.stringify(next));
     } catch (_) {}
 
-    if (!user) return;
+    if (!isAuthed) return;
 
     fetch("/api/recently-played", {
       method: "POST",
@@ -303,15 +297,25 @@ export default function ClassicalPlayer({ user }) {
         sourcePage: currentTrack.sourcePage
       })
     }).catch(() => {});
-  }, [isPlaying, currentTrack?.url, user]);
+  }, [isPlaying, currentTrack?.url, isAuthed]);
 
   useEffect(() => {
     const onOutsideClick = (event) => {
       if (!composerMenuRef.current?.contains(event.target)) setComposerMenuOpen(false);
       if (!languageMenuRef.current?.contains(event.target)) setLanguageMenuOpen(false);
     };
+    const onEscape = (event) => {
+      if (event.key === "Escape") {
+        setComposerMenuOpen(false);
+        setLanguageMenuOpen(false);
+      }
+    };
     window.addEventListener("mousedown", onOutsideClick);
-    return () => window.removeEventListener("mousedown", onOutsideClick);
+    window.addEventListener("keydown", onEscape);
+    return () => {
+      window.removeEventListener("mousedown", onOutsideClick);
+      window.removeEventListener("keydown", onEscape);
+    };
   }, []);
 
   const nextTrack = () => {
@@ -329,13 +333,11 @@ export default function ClassicalPlayer({ user }) {
   };
 
   const toggleFavorite = async () => {
-    if (!user || !currentTrack) return;
+    if (!isAuthed || !currentTrack) return;
     const isFav = favorites.has(currentTrack.url);
 
     if (isFav) {
-      await fetch(`/api/favorites?trackUrl=${encodeURIComponent(currentTrack.url)}`, {
-        method: "DELETE"
-      });
+      await fetch(`/api/favorites?trackUrl=${encodeURIComponent(currentTrack.url)}`, { method: "DELETE" });
       setFavorites((prev) => {
         const next = new Set(prev);
         next.delete(currentTrack.url);
@@ -366,7 +368,7 @@ export default function ClassicalPlayer({ user }) {
 
     setTracks((prev) => mergeAndCleanTracks(prev, prepared));
 
-    if (!user) return;
+    if (!isAuthed) return;
     await Promise.all(
       prepared.map((t) =>
         fetch("/api/custom-tracks", {
@@ -492,7 +494,7 @@ export default function ClassicalPlayer({ user }) {
                 />
               </label>
 
-              {user && (
+              {isAuthed && (
                 <button type="button" className={currentFavorite ? "fav-btn active" : "fav-btn"} onClick={toggleFavorite}>
                   {currentFavorite ? `♥ ${t.favorite}` : `♡ ${t.favorite}`}
                 </button>
@@ -519,11 +521,7 @@ export default function ClassicalPlayer({ user }) {
           </div>
 
           <div className="toolbar">
-            <input
-              value={searchPiece}
-              onChange={(event) => setSearchPiece(event.target.value)}
-              placeholder={t.searchPiece}
-            />
+            <input value={searchPiece} onChange={(event) => setSearchPiece(event.target.value)} placeholder={t.searchPiece} />
 
             <div className="filter-menu" ref={composerMenuRef}>
               <button
@@ -574,11 +572,7 @@ export default function ClassicalPlayer({ user }) {
               >
                 {t.sortByComposer}
               </button>
-              <button
-                type="button"
-                onClick={() => setSortBy("title")}
-                className={sortBy === "title" ? "sort-btn active" : "sort-btn"}
-              >
+              <button type="button" onClick={() => setSortBy("title")} className={sortBy === "title" ? "sort-btn active" : "sort-btn"}>
                 {t.sortByPiece}
               </button>
             </div>
@@ -612,3 +606,4 @@ export default function ClassicalPlayer({ user }) {
     </section>
   );
 }
+

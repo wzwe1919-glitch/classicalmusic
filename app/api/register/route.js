@@ -1,23 +1,29 @@
 import { hash } from "bcryptjs";
 import { z } from "zod";
 import { readStore, uid, writeStore } from "../../../lib/store";
+import { json, parseJsonOrThrow, rateLimitOrThrow, requireSameOriginOrThrow } from "../../../lib/api";
 
 const registerSchema = z.object({
   name: z.string().trim().min(2).max(60),
-  email: z.string().email(),
-  password: z.string().min(6).max(128)
+  email: z.string().trim().email().max(254),
+  password: z
+    .string()
+    .min(10)
+    .max(128)
+    .refine((value) => /[a-z]/i.test(value) && /\d/.test(value), "password_too_weak")
 });
 
 export async function POST(request) {
   try {
-    const body = await request.json();
-    const data = registerSchema.parse(body);
+    requireSameOriginOrThrow(request);
+    rateLimitOrThrow({ request, key: "register", limit: 8, windowMs: 60_000 });
+    const data = await parseJsonOrThrow(request, registerSchema, { maxBytes: 16 * 1024 });
 
     const db = await readStore();
     const email = data.email.toLowerCase();
     const exists = db.users.find((item) => item.email === email);
     if (exists) {
-      return Response.json({ error: "email already registered" }, { status: 409 });
+      return json({ error: "email already registered" }, { status: 409 });
     }
 
     const passwordHash = await hash(data.password, 12);
@@ -32,11 +38,21 @@ export async function POST(request) {
 
     db.users.push(user);
     await writeStore(db);
-    return Response.json(
+    return json(
       { user: { id: user.id, name: user.name, email: user.email } },
       { status: 201 }
     );
-  } catch (_) {
-    return Response.json({ error: "invalid registration data" }, { status: 400 });
+  } catch (err) {
+    const passwordError = err?.details?.fieldErrors?.password?.[0];
+    const error =
+      err?.message === "rate_limited"
+        ? "too many requests"
+        : passwordError
+          ? passwordError
+          : err?.message === "invalid_origin"
+            ? "forbidden"
+            : "invalid registration data";
+
+    return json({ error }, { status: err?.status || 400, headers: err?.headers || {} });
   }
 }

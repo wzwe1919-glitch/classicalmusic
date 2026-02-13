@@ -7,7 +7,9 @@ export default function AnimatedCursor() {
   const ringRef = useRef(null);
 
   useEffect(() => {
-    if (window.matchMedia("(pointer: coarse)").matches) {
+    const coarse = window.matchMedia("(pointer: coarse)").matches;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (coarse || reduced) {
       return undefined;
     }
 
@@ -39,7 +41,7 @@ export default function AnimatedCursor() {
       frame = requestAnimationFrame(animate);
     };
 
-    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mousemove", onMouseMove, { passive: true });
     frame = requestAnimationFrame(animate);
 
     return () => {

@@ -1,5 +1,7 @@
-import { getServerSession } from "next-auth";
+﻿import { getServerSession } from "next-auth";
 import { authOptions } from "../../../lib/auth";
+import { z } from "zod";
+import { json, parseJsonOrThrow, rateLimitOrThrow, requireSameOriginOrThrow } from "../../../lib/api";
 import {
   dedupeTracks,
   detectComposer,
@@ -18,21 +20,22 @@ const AUDIO_EXTENSIONS = /\.(ogg|oga|opus|wav|flac|mp3|m4a)$/i;
 
 const COPY = {
   en: {
-    added: (count) => `found ${count} recording${count === 1 ? "" : "s"} and added ${count === 1 ? "it" : "them"} to your library.`,
+    added: (count) =>
+      `found ${count} recording${count === 1 ? "" : "s"} and added ${count === 1 ? "it" : "them"} to your library.`,
     notFound: (query) =>
       `i could not find reliable public classical recordings for "${query}". try a more specific request like "chopin op 25 no 5".`,
     nonClassical: "i can add only classical works. please send a classical piece or opus.",
     apiMissing: "groq api key is not configured."
   },
   ru: {
-    added: (count) => `нашел ${count} классических ${count === 1 ? "запись" : "записей"} и добавил ${count === 1 ? "ее" : "их"} в библиотеку.`,
+    added: (count) =>
+      `нашёл ${count} ${count === 1 ? "классическую запись" : "классических записей"} и добавил ${count === 1 ? "её" : "их"} в библиотеку.`,
     notFound: (query) =>
-      `не удалось найти надежные публичные классические записи для "${query}". попробуйте более точный запрос, например: "chopin op 25 no 5".`,
-    nonClassical: "я могу добавлять только классическую музыку. укажите классическое произведение или opus.",
+      `не удалось найти надёжные публичные классические записи для "${query}". попробуйте более точный запрос, например: "chopin op 25 no 5".`,
+    nonClassical: "я могу добавлять только классическую музыку. укажите произведение или opus.",
     apiMissing: "groq api key is not configured."
   }
 };
-
 const SYSTEM_PROMPT = `you are "classical chill agent".
 
 rules:
@@ -75,14 +78,33 @@ function extractJsonObject(text = "") {
   return null;
 }
 
+function getTimeoutSignal(ms) {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(ms);
+  }
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
+}
+
+function withTimeout(init, ms) {
+  if (init?.signal) return init;
+  return { ...(init || {}), signal: getTimeoutSignal(ms) };
+}
+
+function safeFetch(url, init) {
+  return globalThis.fetch(url, withTimeout(init, 12_000));
+}
+
 async function groqChat(messages, lang) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     return { reply: COPY[lang].apiMissing, composer_hint: null, search_query: null };
   }
 
-  const response = await fetch(GROQ_URL, {
+  const response = await safeFetch(GROQ_URL, {
     method: "POST",
+    signal: getTimeoutSignal(12_000),
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`
@@ -194,7 +216,7 @@ async function fetchCommonsByQuery(query, composerHint = "", limit = 28) {
     srlimit: String(limit)
   });
 
-  const res = await fetch(`${COMMONS_API}?${params.toString()}`, { next: { revalidate: 3600 } });
+  const res = await safeFetch(`${COMMONS_API}?${params.toString()}`, { next: { revalidate: 3600 } });
   if (!res.ok) return [];
 
   const data = await res.json();
@@ -211,7 +233,7 @@ async function fetchCommonsByQuery(query, composerHint = "", limit = 28) {
     iiprop: "url|mime|mediatype|extmetadata"
   });
 
-  const infoRes = await fetch(`${COMMONS_API}?${infoParams.toString()}`, { next: { revalidate: 3600 } });
+  const infoRes = await safeFetch(`${COMMONS_API}?${infoParams.toString()}`, { next: { revalidate: 3600 } });
   if (!infoRes.ok) return [];
 
   const info = await infoRes.json();
@@ -247,7 +269,7 @@ async function fetchArchiveByQuery(query, composerHint = "", limit = 10) {
     output: "json"
   });
 
-  const res = await fetch(`${ARCHIVE_ADVANCED}?${params.toString()}`, { next: { revalidate: 3600 } });
+  const res = await safeFetch(`${ARCHIVE_ADVANCED}?${params.toString()}`, { next: { revalidate: 3600 } });
   if (!res.ok) return [];
 
   const data = await res.json();
@@ -255,7 +277,7 @@ async function fetchArchiveByQuery(query, composerHint = "", limit = 10) {
   const out = [];
 
   for (const doc of docs.slice(0, limit)) {
-    const metaRes = await fetch(`${ARCHIVE_METADATA}${doc.identifier}`, { next: { revalidate: 3600 } });
+    const metaRes = await safeFetch(`${ARCHIVE_METADATA}${doc.identifier}`, { next: { revalidate: 3600 } });
     if (!metaRes.ok) continue;
 
     const meta = await metaRes.json();
@@ -301,11 +323,28 @@ function isClassicalTrack(track, composer = "") {
   return normalizeText(guessed) === normalizeText(composer);
 }
 
-export async function POST(request) {
-  await getServerSession(authOptions);
+const AgentRequestSchema = z.object({
+  lang: z.enum(["en", "ru"]).optional().default("en"),
+  messages: z
+    .array(
+      z.object({
+        role: z.enum(["user", "assistant"]),
+        content: z.string().min(1).max(1400)
+      })
+    )
+    .max(24)
+    .default([])
+});
 
-  const body = await request.json();
-  const lang = pickLang(body?.lang);
+export async function POST(request) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) return json({ error: "unauthorized" }, { status: 401 });
+
+  try {
+    requireSameOriginOrThrow(request);
+    rateLimitOrThrow({ request, key: "agent", limit: 20, windowMs: 60_000 });
+    const body = await parseJsonOrThrow(request, AgentRequestSchema, { maxBytes: 64 * 1024 });
+    const lang = pickLang(body?.lang);
   const i18n = COPY[lang];
 
   const messages = Array.isArray(body?.messages) ? body.messages.slice(-12) : [];
@@ -313,7 +352,7 @@ export async function POST(request) {
   const { lastUser, composer, candidates } = buildCandidateQueries(agent, messages);
 
   if (!isClassicalIntent(`${lastUser} ${agent?.search_query || ""}`)) {
-    return Response.json({ reply: i18n.nonClassical, tracksToAdd: [] });
+    return json({ reply: i18n.nonClassical, tracksToAdd: [] });
   }
 
   let merged = [];
@@ -352,11 +391,17 @@ export async function POST(request) {
 
   if (!tracksToAdd.length) {
     const queryText = (agent?.search_query || lastUser || "your request").trim();
-    return Response.json({ reply: i18n.notFound(queryText), tracksToAdd: [] });
+    return json({ reply: i18n.notFound(queryText), tracksToAdd: [] });
   }
 
-  return Response.json({
-    reply: i18n.added(tracksToAdd.length),
-    tracksToAdd
-  });
+    return json({
+      reply: i18n.added(tracksToAdd.length),
+      tracksToAdd
+    });
+  } catch (err) {
+    return json(
+      { error: err?.message === "rate_limited" ? "too many requests" : "invalid request" },
+      { status: err?.status || 400, headers: err?.headers || {} }
+    );
+  }
 }

@@ -9,6 +9,7 @@
   --line: rgba(255, 255, 255, 0.12);
   --line-strong: rgba(255, 255, 255, 0.26);
   --accent: #d8d8d8;
+  --focus: rgba(255, 255, 255, 0.55);
 }
 
 * {
@@ -23,16 +24,24 @@ body {
   color: var(--text);
   font-family: Inter, "Segoe UI", sans-serif;
   scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 a {
   color: inherit;
 }
 
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
 .page-root {
   position: relative;
   min-height: 100vh;
-  padding: 22px 20px 40px;
+  padding: calc(22px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right))
+    calc(40px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left));
   overflow: hidden;
 }
 
@@ -76,13 +85,29 @@ a {
   gap: 14px;
 }
 
-.main-nav a {
+.nav-link {
   color: var(--muted);
   text-decoration: none;
+  position: relative;
 }
 
-.main-nav a:hover {
+.nav-link:hover {
   color: #fff;
+}
+
+.nav-link.active {
+  color: #fff;
+}
+
+.nav-link.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -10px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
 }
 
 .auth-zone {

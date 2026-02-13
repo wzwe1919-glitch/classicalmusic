@@ -1,11 +1,19 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export default function Snowfall() {
   const canvasRef = useRef(null);
+  const [enabled, setEnabled] = useState(false);
 
   useEffect(() => {
+    const coarse = window.matchMedia?.("(pointer: coarse)")?.matches;
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    setEnabled(!coarse && !reduced);
+  }, []);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
     const canvas = canvasRef.current;
     if (!canvas) return undefined;
     const ctx = canvas.getContext("2d");
@@ -13,11 +21,16 @@ export default function Snowfall() {
 
     let animationFrame;
     const flakes = [];
-    const amount = 120;
+    const amount = 90;
+    let running = true;
 
     const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      canvas.width = Math.floor(window.innerWidth * dpr);
+      canvas.height = Math.floor(window.innerHeight * dpr);
+      canvas.style.width = `${window.innerWidth}px`;
+      canvas.style.height = `${window.innerHeight}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
 
     const createFlakes = () => {
@@ -34,6 +47,7 @@ export default function Snowfall() {
     };
 
     const draw = () => {
+      if (!running) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = "rgba(255,255,255,0.7)";
 
@@ -60,11 +74,19 @@ export default function Snowfall() {
     draw();
     window.addEventListener("resize", resize);
 
+    const onVisibility = () => {
+      running = document.visibilityState === "visible";
+      if (running) draw();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
     return () => {
       window.removeEventListener("resize", resize);
+      document.removeEventListener("visibilitychange", onVisibility);
       cancelAnimationFrame(animationFrame);
     };
-  }, []);
+  }, [enabled]);
 
+  if (!enabled) return null;
   return <canvas ref={canvasRef} className="snowfall" aria-hidden="true" />;
 }

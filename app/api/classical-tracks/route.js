@@ -1,4 +1,4 @@
-import {
+﻿import {
   COMPOSER_PROFILES,
   cleanPieceTitle,
   dedupeTracks,
@@ -9,6 +9,24 @@ import {
 const COMMONS_API = "https://commons.wikimedia.org/w/api.php";
 const INTERNET_ARCHIVE_METADATA_API = "https://archive.org/metadata/";
 const AUDIO_EXTENSIONS = /\.(ogg|oga|opus|wav|flac|mp3|m4a)$/i;
+
+function getTimeoutSignal(ms) {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(ms);
+  }
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
+}
+
+function withTimeout(init, ms) {
+  if (init?.signal) return init;
+  return { ...(init || {}), signal: getTimeoutSignal(ms) };
+}
+
+function safeFetch(url, init) {
+  return globalThis.fetch(url, withTimeout(init, 12_000));
+}
 
 const CATEGORY_TITLES = [
   "Category:Audio files of Classical period classical music",
@@ -103,7 +121,7 @@ async function fetchCommonsInfoByTitles(fileTitles = [], fallbackComposer = "") 
         iiprop: "url|mime|mediatype|extmetadata"
       });
 
-      const response = await fetch(`${COMMONS_API}?${params.toString()}`, { next: { revalidate: 3600 } });
+      const response = await safeFetch(`${COMMONS_API}?${params.toString()}`, { next: { revalidate: 3600 } });
       if (!response.ok) return [];
 
       const data = await response.json();
@@ -125,7 +143,7 @@ async function fetchSearchFileTitles(searchTerm, limit = 220) {
     srlimit: String(limit)
   });
 
-  const response = await fetch(`${COMMONS_API}?${params.toString()}`, { next: { revalidate: 3600 } });
+  const response = await safeFetch(`${COMMONS_API}?${params.toString()}`, { next: { revalidate: 3600 } });
   if (!response.ok) return [];
 
   const data = await response.json();
@@ -161,7 +179,7 @@ async function fetchCategoryTracks(categoryTitle, limit = 90) {
     iiprop: "url|mime|mediatype|extmetadata"
   });
 
-  const response = await fetch(`${COMMONS_API}?${params.toString()}`, { next: { revalidate: 3600 } });
+  const response = await safeFetch(`${COMMONS_API}?${params.toString()}`, { next: { revalidate: 3600 } });
   if (!response.ok) return [];
 
   const data = await response.json();
@@ -192,7 +210,7 @@ function pickBestArchiveFiles(files = []) {
 
 async function fetchArchiveItemTracks(item, perItemLimit = 18) {
   try {
-    const response = await fetch(`${INTERNET_ARCHIVE_METADATA_API}${item.identifier}`, {
+    const response = await safeFetch(`${INTERNET_ARCHIVE_METADATA_API}${item.identifier}`, {
       next: { revalidate: 3600 }
     });
     if (!response.ok) return [];

@@ -4,27 +4,28 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 const T = {
   en: {
-    welcome:
-      "tell me a classical piece (example: chopin op 25 no 5). i will find recordings and add them to your library.",
+    welcome: 'tell me a classical piece (example: "chopin op 25 no 5"). i will find recordings and add them to your library.',
     subtitleSynced: "classical-only • synced",
-    subtitleGuest: "classical-only • guest",
+    subtitleGuest: "classical-only • sign in required",
     placeholder: "try: chopin op 25 no 5",
     send: "send",
     close: "close",
-    open: "open ai agent",
+    open: "open agent",
     failed: "agent request failed.",
+    unauthorized: "sign in to use the agent.",
     addedHeading: "added to library"
   },
   ru: {
     welcome:
-      "введите классическое произведение (например: chopin op 25 no 5). я найду записи и добавлю их в библиотеку.",
+      'введите классическое произведение (например: "chopin op 25 no 5"). я найду записи и добавлю их в библиотеку.',
     subtitleSynced: "только классика • синхронизировано",
-    subtitleGuest: "только классика • гость",
+    subtitleGuest: "только классика • нужен вход",
     placeholder: "пример: chopin op 25 no 5",
     send: "отправить",
     close: "закрыть",
-    open: "открыть ии-агента",
+    open: "открыть агента",
     failed: "ошибка запроса к агенту.",
+    unauthorized: "войдите, чтобы использовать агента.",
     addedHeading: "добавлено в библиотеку"
   }
 };
@@ -50,14 +51,12 @@ export default function AgentWidget({ user, onAddTracks, language = "en" }) {
   const [messages, setMessages] = useState([{ role: "assistant", content: tr.welcome }]);
 
   const listRef = useRef(null);
-  const canUse = useMemo(() => true, []);
+  const isAuthed = useMemo(() => Boolean(user?.id), [user?.id]);
 
   useEffect(() => {
     setMessages((prev) => {
       if (!prev.length) return [{ role: "assistant", content: tr.welcome }];
-      if (prev.length === 1 && prev[0].role === "assistant") {
-        return [{ role: "assistant", content: tr.welcome }];
-      }
+      if (prev.length === 1 && prev[0].role === "assistant") return [{ role: "assistant", content: tr.welcome }];
       return prev;
     });
   }, [tr.welcome]);
@@ -72,6 +71,11 @@ export default function AgentWidget({ user, onAddTracks, language = "en" }) {
     const text = input.trim();
     if (!text || busy) return;
 
+    if (!isAuthed) {
+      setMessages((prev) => [...prev, { role: "assistant", content: tr.unauthorized }]);
+      return;
+    }
+
     setInput("");
     const next = [...messages, { role: "user", content: text }];
     setMessages(next);
@@ -84,13 +88,22 @@ export default function AgentWidget({ user, onAddTracks, language = "en" }) {
         body: JSON.stringify({ messages: next, lang: uiLang })
       });
 
+      if (res.status === 401) {
+        setMessages((prev) => [...prev, { role: "assistant", content: tr.unauthorized }]);
+        return;
+      }
+
       const data = await res.json();
       setMessages((prev) => [...prev, { role: "assistant", content: data.reply || "ok" }]);
 
       if (Array.isArray(data.tracksToAdd) && data.tracksToAdd.length) {
         onAddTracks?.(data.tracksToAdd);
 
-        const lines = data.tracksToAdd.slice(0, 3).map((track) => `• ${formatTrackLine(track)}`).join("\n");
+        const lines = data.tracksToAdd
+          .slice(0, 3)
+          .map((track) => `• ${formatTrackLine(track)}`)
+          .join("\n");
+
         setMessages((prev) => [
           ...prev,
           {
@@ -106,8 +119,6 @@ export default function AgentWidget({ user, onAddTracks, language = "en" }) {
     }
   }
 
-  if (!canUse) return null;
-
   return (
     <div className={open ? "agent-wrap open" : "agent-wrap"}>
       {open && (
@@ -115,7 +126,7 @@ export default function AgentWidget({ user, onAddTracks, language = "en" }) {
           <div className="agent-head">
             <div className="agent-title">
               <strong>agent</strong>
-              <span>{user ? tr.subtitleSynced : tr.subtitleGuest}</span>
+              <span>{isAuthed ? tr.subtitleSynced : tr.subtitleGuest}</span>
             </div>
             <button type="button" className="agent-close" onClick={() => setOpen(false)} aria-label={tr.close}>
               ×
@@ -165,3 +176,4 @@ export default function AgentWidget({ user, onAddTracks, language = "en" }) {
     </div>
   );
 }
+
