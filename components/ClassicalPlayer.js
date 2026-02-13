@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import AgentWidget from "./AgentWidget";
+import { dedupeTracks, sanitizeTrack } from "../lib/classical";
 
 const I18N = {
   en: {
@@ -20,7 +22,9 @@ const I18N = {
     play: "play",
     pause: "pause",
     next: "next",
-    language: "language"
+    language: "language",
+    favorite: "favorite",
+    noResults: "no tracks match your filters"
   },
   ru: {
     nowPlaying: "сейчас играет",
@@ -39,7 +43,9 @@ const I18N = {
     play: "воспроизвести",
     pause: "пауза",
     next: "далее",
-    language: "язык"
+    language: "язык",
+    favorite: "избранное",
+    noResults: "по фильтрам ничего не найдено"
   },
   kk: {
     nowPlaying: "қазір ойналуда",
@@ -58,7 +64,9 @@ const I18N = {
     play: "ойнату",
     pause: "үзіліс",
     next: "келесі",
-    language: "тіл"
+    language: "тіл",
+    favorite: "таңдаулы",
+    noResults: "сүзгі бойынша ештеңе табылмады"
   }
 };
 
@@ -77,6 +85,32 @@ function formatTime(seconds) {
 
 function normalizeComposer(value = "") {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function toUiTrack(rawTrack) {
+  if (!rawTrack?.url || !rawTrack?.title) return null;
+  return sanitizeTrack(
+    {
+      id: rawTrack.id,
+      title: rawTrack.title,
+      composer: rawTrack.composer || "",
+      url: rawTrack.url,
+      provider: rawTrack.provider || "",
+      sourcePage: rawTrack.sourcePage || ""
+    },
+    { requireKnownComposer: false }
+  );
+}
+
+function mergeAndCleanTracks(...groups) {
+  const byUrl = new Map();
+
+  groups.flat().forEach((track) => {
+    const cleaned = toUiTrack(track);
+    if (cleaned) byUrl.set(cleaned.url, cleaned);
+  });
+
+  return dedupeTracks(Array.from(byUrl.values()));
 }
 
 function PlayerIcon({ type }) {
@@ -102,6 +136,7 @@ export default function ClassicalPlayer({ user }) {
   const [sortBy, setSortBy] = useState("composer");
   const [composerMenuOpen, setComposerMenuOpen] = useState(false);
   const [favorites, setFavorites] = useState(new Set());
+  const lastRecordedRef = useRef("");
 
   const audioRef = useRef(null);
   const composerMenuRef = useRef(null);
@@ -112,7 +147,7 @@ export default function ClassicalPlayer({ user }) {
     () =>
       Array.from(
         new Set(tracks.map((track) => normalizeComposer(track.composer || "")).filter(Boolean))
-      ).sort((a, b) => a.localeCompare(b)),
+      ).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })),
     [tracks]
   );
 
@@ -121,14 +156,17 @@ export default function ClassicalPlayer({ user }) {
     const list = tracks.filter((track) => {
       const composer = normalizeComposer(track.composer || "");
       const matchComposer = composerFilter === "all" || composer === composerFilter;
-      const matchText = !text || track.title.toLowerCase().includes(text);
+      const matchText =
+        !text ||
+        track.title.toLowerCase().includes(text) ||
+        composer.toLowerCase().includes(text);
       return matchComposer && matchText;
     });
 
     return [...list].sort((a, b) =>
       sortBy === "composer"
-        ? normalizeComposer(a.composer).localeCompare(normalizeComposer(b.composer))
-        : a.title.localeCompare(b.title)
+        ? normalizeComposer(a.composer).localeCompare(normalizeComposer(b.composer), undefined, { sensitivity: "base" })
+        : a.title.localeCompare(b.title, undefined, { sensitivity: "base" })
     );
   }, [tracks, searchPiece, composerFilter, sortBy]);
 
@@ -147,7 +185,7 @@ export default function ClassicalPlayer({ user }) {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "could not load tracks");
 
-        const loadedTracks = data.tracks || [];
+        const loadedTracks = mergeAndCleanTracks(data.tracks || []);
         if (!cancelled) {
           setTracks(loadedTracks);
           if (loadedTracks[0]?.url) setCurrentUrl(loadedTracks[0].url);
@@ -164,6 +202,33 @@ export default function ClassicalPlayer({ user }) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    async function loadCustom() {
+      const res = await fetch("/api/custom-tracks");
+      if (!res.ok) return;
+      const data = await res.json();
+      const customTracks = data.customTracks || [];
+      if (!cancelled && customTracks.length) {
+        const mappedCustom = customTracks.map((track) => ({
+          id: track.id,
+          title: track.title,
+          composer: track.composer,
+          url: track.trackUrl,
+          provider: track.provider,
+          sourcePage: track.sourcePage
+        }));
+
+        setTracks((prev) => mergeAndCleanTracks(prev, mappedCustom));
+      }
+    }
+    loadCustom();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -187,11 +252,58 @@ export default function ClassicalPlayer({ user }) {
   }, [volume]);
 
   useEffect(() => {
+    if (!tracks.length) return;
+    const exists = tracks.some((track) => track.url === currentUrl);
+    if (!exists) setCurrentUrl(tracks[0].url);
+  }, [tracks, currentUrl]);
+
+  useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !currentTrack?.url) return;
     if (isPlaying) audio.play().catch(() => setIsPlaying(false));
     else audio.pause();
   }, [isPlaying, currentTrack?.url]);
+
+  useEffect(() => {
+    // record recently played when playback starts for a track (avoid duplicates)
+    if (!currentTrack?.url || !isPlaying) return;
+
+    const url = currentTrack.url;
+    if (lastRecordedRef.current === url) return;
+    lastRecordedRef.current = url;
+
+    // guest fallback: local history
+    try {
+      const key = "recentlyPlayed";
+      const prev = JSON.parse(localStorage.getItem(key) || "[]");
+      const next = [
+        {
+          trackUrl: url,
+          title: currentTrack.title,
+          composer: currentTrack.composer,
+          provider: currentTrack.provider,
+          sourcePage: currentTrack.sourcePage,
+          playedAt: new Date().toISOString()
+        },
+        ...prev.filter((item) => item.trackUrl !== url)
+      ].slice(0, 30);
+      localStorage.setItem(key, JSON.stringify(next));
+    } catch (_) {}
+
+    if (!user) return;
+
+    fetch("/api/recently-played", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        trackUrl: url,
+        title: currentTrack.title,
+        composer: currentTrack.composer,
+        provider: currentTrack.provider,
+        sourcePage: currentTrack.sourcePage
+      })
+    }).catch(() => {});
+  }, [isPlaying, currentTrack?.url, user]);
 
   useEffect(() => {
     const onOutsideClick = (event) => {
@@ -244,6 +356,32 @@ export default function ClassicalPlayer({ user }) {
       })
     });
     setFavorites((prev) => new Set(prev).add(currentTrack.url));
+  };
+
+  const addTracksFromAgent = async (newTracks) => {
+    if (!Array.isArray(newTracks) || !newTracks.length) return;
+
+    const prepared = mergeAndCleanTracks(newTracks);
+    if (!prepared.length) return;
+
+    setTracks((prev) => mergeAndCleanTracks(prev, prepared));
+
+    if (!user) return;
+    await Promise.all(
+      prepared.map((t) =>
+        fetch("/api/custom-tracks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            trackUrl: t.url,
+            title: t.title,
+            composer: t.composer,
+            provider: t.provider,
+            sourcePage: t.sourcePage
+          })
+        }).catch(() => {})
+      )
+    );
   };
 
   const activeLanguage = LANGUAGES.find((item) => item.value === language) || LANGUAGES[0];
@@ -356,7 +494,7 @@ export default function ClassicalPlayer({ user }) {
 
               {user && (
                 <button type="button" className={currentFavorite ? "fav-btn active" : "fav-btn"} onClick={toggleFavorite}>
-                  {currentFavorite ? "♥ favorite" : "♡ favorite"}
+                  {currentFavorite ? `♥ ${t.favorite}` : `♡ ${t.favorite}`}
                 </button>
               )}
             </div>
@@ -448,6 +586,7 @@ export default function ClassicalPlayer({ user }) {
 
           {loading && <p className="status">{t.loading}</p>}
           {error && <p className="status error">{error}</p>}
+          {!loading && !error && filteredTracks.length === 0 && <p className="status">{t.noResults}</p>}
 
           <ul className="table-list">
             {filteredTracks.map((track, index) => (
@@ -468,6 +607,8 @@ export default function ClassicalPlayer({ user }) {
           </ul>
         </aside>
       </div>
+
+      <AgentWidget user={user} onAddTracks={addTracksFromAgent} language={language} />
     </section>
   );
 }

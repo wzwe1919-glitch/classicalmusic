@@ -13,6 +13,7 @@ export default function AppHeader({ user }) {
 
         <nav className="main-nav">
           <Link href="/">home</Link>
+          <Link href="/recently-played">recent</Link>
           <Link href="/favorites">favorites</Link>
           <Link href="/profile">profile</Link>
         </nav>
